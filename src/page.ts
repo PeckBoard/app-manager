@@ -100,6 +100,16 @@ export const PAGE = `<!doctype html>
   .banner.bad { background: var(--err-bg); border-bottom-color: var(--err-line); }
   .banner.warn { background: var(--warn-bg); border-bottom-color: var(--warn-line); }
   .banner .pm { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  /* deep-link request bar (see deeplink.ts) */
+  .reqbar {
+    padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--badge-bg);
+    display: flex; align-items: center; gap: 12px; flex: 0 0 auto; font-size: 12px;
+    flex-wrap: wrap;
+  }
+  .reqbar .lead { font-weight: 600; }
+  .reqbar .item { display: inline-flex; align-items: center; gap: 6px; }
+  .reqbar .note { color: var(--muted); }
+  .approw.req { background: var(--badge-bg); }
   .layout { flex: 1; display: flex; min-height: 0; }
   main { flex: 1; overflow: auto; min-width: 0; }
   .grid { display: flex; flex-direction: column; }
@@ -254,6 +264,7 @@ export const PAGE = `<!doctype html>
 </header>
 
 <div class="banner" id="banner" role="status" aria-live="polite"><span id="bannerText">Loading…</span></div>
+<div class="reqbar" id="reqBar" role="status" hidden></div>
 <div class="depsbar" id="depsBar">
   <span class="info" id="depsInfo">Dependencies: not resolved yet.</span>
   <span class="spacer"></span>
@@ -414,12 +425,28 @@ export const PAGE = `<!doctype html>
     lastFocus: null, confirmAction: null, installApp: null, sessionId: null
   };
 
+  // What a deep link asked us to install, parsed server-side and baked in
+  // (deeplink.ts). null when the page was opened normally. It PREFILLS ONLY:
+  // the request bar names the apps and every install still goes through the
+  // same button, the same account+model picker, and the same confirmation.
+  var REQ = __APP_MANAGER_REQUEST__;
+  // The requested target is honoured once, on the first load.
+  var reqTargetPending = !!(REQ && REQ.target);
+
+  function requested(appId) {
+    return !!REQ && REQ.apps.indexOf(appId) >= 0;
+  }
+
   // ── targets ────────────────────────────────────────────────────────
   function loadTargets() {
     return getJSON(API + "/targets").then(function (d) {
       state.targets = d.targets || [];
       state.byId = {};
       state.targets.forEach(function (t) { state.byId[t.id] = t; });
+      if (reqTargetPending) {
+        reqTargetPending = false;
+        if (state.byId[REQ.target]) state.current = REQ.target;
+      }
       if (!state.current || !state.byId[state.current]) {
         state.current = state.targets.length ? state.targets[0].id : null;
       }
@@ -458,11 +485,13 @@ export const PAGE = `<!doctype html>
       state.overview = d;
       renderBanner(d.distro);
       renderGrid(d.apps || []);
+      renderRequest();
       loadDeps();
     }).catch(function (e) {
       if (state.current !== target) return;
       setBanner(e.message, "bad");
       clear($("grid"));
+      renderRequest();
       $("gridEmpty").textContent = "No applications could be listed for this target.";
       $("gridEmpty").style.display = "block";
     });
@@ -494,8 +523,59 @@ export const PAGE = `<!doctype html>
     apps.forEach(function (a) { grid.appendChild(buildRow(a)); });
   }
 
+  // ── deep-link request bar ──────────────────────────────────────────
+  // Names what the linking page asked for and offers each missing app's own
+  // Install button — the SAME button the row has, so a local install still
+  // opens the account+model picker and a removal is never offered here.
+  function renderRequest() {
+    var bar = $("reqBar");
+    clear(bar);
+    if (!REQ || !REQ.apps.length) { bar.hidden = true; return; }
+    bar.hidden = false;
+
+    var known = {};
+    ((state.overview && state.overview.apps) || []).forEach(function (a) {
+      known[a.id] = a;
+    });
+    bar.appendChild(el("span", "lead",
+      (REQ.from ? REQ.from + " asked for these on " : "Requested on ") + targetLabel() + ":"));
+
+    var unknown = [];
+    REQ.apps.forEach(function (id) {
+      var a = known[id];
+      if (!a) { unknown.push(id); return; }
+      var item = el("span", "item");
+      item.appendChild(document.createTextNode(a.name));
+      if (a.installed) {
+        item.appendChild(el("span", "badge ok", a.state_label));
+        item.appendChild(el("span", "note", "already installed"));
+      } else {
+        var btn = el("button", "primary", a.action_label);
+        btn.setAttribute("aria-label", a.action_label + " " + a.name + " on " + targetLabel());
+        if (!a.actionable) {
+          btn.disabled = true;
+          item.appendChild(el("span", "note", a.blocked_reason || ""));
+        }
+        btn.onclick = function () { focusRow(a.id); startInstall(a); };
+        item.appendChild(btn);
+      }
+      bar.appendChild(item);
+    });
+
+    if (unknown.length) {
+      bar.appendChild(el("span", "note",
+        "Not in the catalog for this target: " + unknown.join(", ") + "."));
+    }
+  }
+
+  function focusRow(appId) {
+    var r = state.rows[appId];
+    if (r && r.row && r.row.scrollIntoView) r.row.scrollIntoView({ block: "center" });
+  }
+
   function buildRow(a) {
-    var row = el("div", "approw " + (a.installed ? "installed" : "missing"));
+    var row = el("div", "approw " + (a.installed ? "installed" : "missing")
+      + (requested(a.id) ? " req" : ""));
     var body = el("div", "body");
     var name = el("div", "name");
     name.appendChild(document.createTextNode(a.name));

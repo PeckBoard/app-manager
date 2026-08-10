@@ -9,6 +9,7 @@
 // gets metadata only, and a target stores nothing but the vault key's id.
 
 import { PAGE } from "./page";
+import { injectRequest, parseInstallRequest } from "./deeplink";
 import { listModels, sshKeyList } from "./host";
 import { getDefaultInstallModel, thinkingModelChoices } from "./installSession";
 import {
@@ -28,6 +29,7 @@ import {
   resolveTarget,
 } from "./targets";
 import { errMsg, htmlResponse, jsonResponse } from "./verdict";
+import { queryParam } from "./query";
 import { friendlyError, targetView } from "./view";
 
 const PAGE_PATH = "/plugin-api/v1/app-manager";
@@ -49,9 +51,15 @@ function parseBody(body: string): any {
 }
 
 /// Serve the dashboard page (the sidebar item opens this).
+///
+/// `?install=…` is a deep-link prefill — see deeplink.ts. It only names apps
+/// in a request bar; installing still takes a click here.
 export function serveHttp(payload: any): string {
   if (up(payload?.method) === "GET" && str(payload?.path) === PAGE_PATH) {
-    return htmlResponse(200, PAGE);
+    return htmlResponse(
+      200,
+      injectRequest(PAGE, parseInstallRequest(str(payload?.query))),
+    );
   }
   return htmlResponse(
     404,
@@ -155,18 +163,5 @@ function saveTarget(input: any): any {
   return targetView(rec);
 }
 
-/// Extract and URL-decode `name`'s value from a `&`-separated query string.
-export function queryParam(query: string, name: string): string | undefined {
-  for (const pair of query.split("&")) {
-    const idx = pair.indexOf("=");
-    if (idx < 0) continue;
-    if (pair.slice(0, idx) !== name) continue;
-    const v = pair.slice(idx + 1);
-    try {
-      return decodeURIComponent(v.replace(/\+/g, "%20"));
-    } catch (_e) {
-      return v;
-    }
-  }
-  return undefined;
-}
+// Re-exported for callers (and tests) that have always imported it from here.
+export { queryParam };

@@ -82,6 +82,32 @@ Notes on the shape of it:
 - A target that isn't a usable Linux host renders as a refusal instead of an
   app grid; every error is a sentence, never raw JSON.
 
+### Deep Link: `?install=`
+
+Another plugin's page can point a person here with what it needs installed.
+Graphify's install handoff opens:
+
+```
+/plugin-page/app-manager/app-manager?install=python3,pip,graphifyy&from=graphify
+```
+
+| Param     | Meaning                                                        |
+| --------- | -------------------------------------------------------------- |
+| `install` | comma-separated catalog ids; unknown ids are named, never acted on |
+| `from`    | optional label for the request bar ("graphify asked for these")  |
+| `target`  | optional target id, honoured once on first load                  |
+
+The page renders a request bar above the grid listing each app with its state
+and, for the missing ones, that app's own Install button.
+
+**The link only prefills.** It cannot start an install: the buttons are the
+same ones the rows carry, so a local install still opens the account+model
+picker and nothing runs until a person clicks. The query is parsed server-side
+in `src/deeplink.ts` (ids must be catalog slugs, the list is capped, `from` is
+stripped to plain words) and injected into the page as a JSON literal, so a
+crafted URL can neither smuggle markup into the page nor name something the
+catalog doesn't have.
+
 ### Local Target and Folder Scope
 
 `peckboard_exec_any` pins its cwd to the caller's folder, and a **global**

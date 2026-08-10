@@ -62,6 +62,25 @@ describe("the page route", () => {
     expect(v.payload.body).toContain("App Manager");
   });
 
+  it("leaves the deep-link request null on a normal load", () => {
+    const v = JSON.parse(serveHttp({ method: "GET", path: PAGE_PATH }));
+    expect(v.payload.body).toContain("var REQ = null;");
+    expect(v.payload.body).not.toContain("__APP_MANAGER_REQUEST__");
+  });
+
+  it("bakes a ?install= deep link into the page", () => {
+    const v = JSON.parse(
+      serveHttp({
+        method: "GET",
+        path: PAGE_PATH,
+        query: "install=python3,pip&from=graphify&theme=dark",
+      }),
+    );
+    expect(v.payload.body).toContain(
+      'var REQ = {"apps":["python3","pip"],"from":"graphify","target":""};',
+    );
+  });
+
   it("404s any other path", () => {
     const v = JSON.parse(
       serveHttp({ method: "GET", path: "/plugin-api/v1/nope" }),

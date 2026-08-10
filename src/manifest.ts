@@ -21,7 +21,7 @@ const DESCRIPTION =
   "shows tool-level session activity, and still records provenance itself via " +
   "package-DB snapshots taken around the session — removal stays script-based.";
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 const REPOSITORY = "https://github.com/PeckBoard/app-manager";
 
 // Inline SVG (lucide "package") for the sidebar entry; rendered sandboxed.
