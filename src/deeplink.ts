@@ -74,7 +74,13 @@ export function requestLiteral(req: InstallRequest | null): string {
   let out = "";
   for (const ch of JSON.stringify(req)) {
     const code = ch.charCodeAt(0);
-    if (ch === "<" || ch === ">" || ch === "&" || code === 0x2028 || code === 0x2029) {
+    if (
+      ch === "<" ||
+      ch === ">" ||
+      ch === "&" ||
+      code === 0x2028 ||
+      code === 0x2029
+    ) {
       out += "\\u" + code.toString(16).padStart(4, "0");
       continue;
     }

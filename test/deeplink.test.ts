@@ -73,16 +73,25 @@ describe("requestLiteral", () => {
     expect(lit).not.toContain("<");
     expect(lit).not.toContain(">");
     expect(lit).not.toContain("&");
-    expect(JSON.parse(lit.replace(/\\u003c/g, "<").replace(/\\u003e/g, ">").replace(/\\u0026/g, "&")))
-      .toEqual({ apps: ["pip"], from: "</script><img>&", target: "" });
+    expect(
+      JSON.parse(
+        lit
+          .replace(/\\u003c/g, "<")
+          .replace(/\\u003e/g, ">")
+          .replace(/\\u0026/g, "&"),
+      ),
+    ).toEqual({ apps: ["pip"], from: "</script><img>&", target: "" });
   });
 });
 
 describe("injectRequest", () => {
   it("replaces the token with the literal", () => {
     const page = `<script>var REQ = ${REQUEST_TOKEN};</script>`;
-    expect(injectRequest(page, { apps: ["pip"], from: "graphify", target: "" }))
-      .toBe('<script>var REQ = {"apps":["pip"],"from":"graphify","target":""};</script>');
+    expect(
+      injectRequest(page, { apps: ["pip"], from: "graphify", target: "" }),
+    ).toBe(
+      '<script>var REQ = {"apps":["pip"],"from":"graphify","target":""};</script>',
+    );
   });
 
   it("leaves a normal load with a null literal", () => {

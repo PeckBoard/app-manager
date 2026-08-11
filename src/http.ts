@@ -10,6 +10,13 @@
 
 import { PAGE } from "./page";
 import { injectRequest, parseInstallRequest } from "./deeplink";
+import {
+  buildCustomApp,
+  forgetCustomApp,
+  getCustomApp,
+  listCustomApps,
+  putCustomApp,
+} from "./customApps";
 import { listModels, sshKeyList } from "./host";
 import { getDefaultInstallModel, thinkingModelChoices } from "./installSession";
 import {
@@ -136,6 +143,31 @@ export function serveAuthed(payload: any): string {
         200,
         appInstall({ target: b?.target, app: b?.app, model: b?.model }),
       );
+    }
+    // Manually added apps: the dashboard's own CRUD, mirroring remote-target
+    // CRUD (no MCP tool adds one). The install/remove commands stored here are
+    // user-authored shell — the page shows them back verbatim before a run,
+    // and only an authenticated dashboard request can create them.
+    if (method === "GET" && path === `${API}/apps-custom`) {
+      return jsonResponse(200, { apps: listCustomApps() });
+    }
+    if (method === "POST" && path === `${API}/apps-custom`) {
+      const b = parseBody(body);
+      const existing = str(b?.id).trim()
+        ? getCustomApp(str(b.id).trim())
+        : null;
+      const rec = buildCustomApp(b, existing);
+      putCustomApp(rec);
+      return jsonResponse(200, { app: rec });
+    }
+    // Forget — drops the entry from this list. Uninstalls nothing; the page's
+    // confirmation says so.
+    if (method === "POST" && path === `${API}/apps-custom-remove`) {
+      const id = str(parseBody(body)?.id).trim();
+      if (!forgetCustomApp(id)) {
+        throw new Error(`'${id}' is not a manually added app`);
+      }
+      return jsonResponse(200, { forgotten: id });
     }
     if (method === "POST" && path === `${API}/remove`) {
       const b = parseBody(body);
