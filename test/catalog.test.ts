@@ -2,14 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   APPS,
   findApp,
+  isVendorApp,
   installRecipeFor,
   packagesFor,
   removeRecipeFor,
 } from "../src/catalog";
 
 const PMS = ["apt", "dnf", "pacman", "zypper"] as const;
-const VENDOR_ONLY = ["claude", "cursor-agent", "ollama"];
-const PM_APPS = ["git", "node", "docker", "ripgrep"];
+const VENDOR_ONLY = ["claude", "cursor-agent", "ollama", "orca-slicer"];
+const PM_APPS = ["git", "node", "docker", "ripgrep", "xvfb"];
 
 describe("catalog", () => {
   it("includes at least the required apps", () => {
@@ -81,6 +82,42 @@ describe("catalog", () => {
     };
     expect(installRecipeFor(fake, "apt")).toBeNull();
     expect(removeRecipeFor(fake, null)).toBeNull();
+  });
+  describe("print-farm prerequisites", () => {
+    it("xvfb follows each distro's package name and is detected via xvfb-run", () => {
+      const app = findApp("xvfb")!;
+      expect(app.detect).toBe("command -v xvfb-run");
+      expect(packagesFor(app, "apt")).toEqual(["xvfb"]);
+      expect(packagesFor(app, "dnf")).toEqual(["xorg-x11-server-Xvfb"]);
+      expect(packagesFor(app, "pacman")).toEqual(["xorg-server-xvfb"]);
+      expect(packagesFor(app, "zypper")).toEqual([
+        "xorg-x11-server-Xvfb",
+        "xvfb-run",
+      ]);
+      expect(isVendorApp(app)).toBe(false);
+    });
+
+    it("orca-slicer is a user-local vendor install with no package-db footprint", () => {
+      const app = findApp("orca-slicer")!;
+      expect(isVendorApp(app)).toBe(true);
+      for (const pm of [...PMS, null] as const) {
+        expect(installRecipeFor(app, pm)).toBe(app.install.vendor);
+        expect(removeRecipeFor(app, pm)).toBe(app.remove.vendor);
+        if (pm) expect(packagesFor(app, pm)).toEqual([]);
+      }
+      const install = app.install.vendor!;
+      // Official release asset, extracted (no FUSE), wrapped into ~/.local/bin.
+      expect(install).toContain(
+        "https://github.com/SoftFever/OrcaSlicer/releases/latest",
+      );
+      expect(install).toContain("--appimage-extract");
+      expect(install).toContain('"$HOME/.local/bin/orca-slicer"');
+      expect(install).not.toContain("sudo");
+      expect(app.remove.vendor).toContain("$HOME/.local/share/orca-slicer");
+      // A pre-existing Flathub install counts as present.
+      expect(app.detect).toContain("command -v orca-slicer");
+      expect(app.detect).toContain("flatpak info com.orcaslicer.OrcaSlicer");
+    });
   });
 
   describe("python / pip namespace entries", () => {

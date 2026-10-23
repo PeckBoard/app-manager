@@ -58,6 +58,11 @@ narrows nothing: a command an AI session proposes is stored as a suggestion
 and only becomes runnable when you accept it in the dashboard.
 **0.8.1 is the dashboard on a phone** — layout only, no permission, route or
 behaviour change.
+**0.8.2 adds `xvfb` and `orca-slicer` to the catalog** (for print-farm's
+`?install=orca-slicer,xvfb&from=print-farm` handoff) — data only, no
+permission change. OrcaSlicer installs user-local: the latest official
+AppImage is extracted into `~/.local/share/orca-slicer` behind a
+`~/.local/bin/orca-slicer` wrapper.
 
 ## Dashboard Page
 
@@ -348,7 +353,7 @@ secondary "Installed with …" line, each with its version.
 
 Honest edges, deliberately visible:
 
-- **Vendor `curl | sh` installers** (claude, cursor-agent, ollama) never
+- **Vendor installers** (claude, cursor-agent, ollama, orca-slicer) never
   touch the package database. Their rows say so — "not tracked by the
   package manager" — instead of showing an empty list that would read as
   "no dependencies". Prerequisites such an installer does `apt-get
@@ -402,7 +407,7 @@ returns the same payload.
 
 Honest limits, stated in the UI rather than papered over:
 
-- **Vendor `curl | sh` installs** (claude, cursor-agent, ollama) never
+- **Vendor installs** (claude, cursor-agent, ollama, orca-slicer) never
   enter the package database, so they have **no dependency edges at
   all**. Their rows say "not tracked by the package manager" — never an
   empty tree that would read as "no dependencies".

@@ -104,6 +104,32 @@ function pipFreezeVersion(pkg: string): string {
     ` | awk -F'==' -v p=${shQuote(pkg)} '$1 == p'`
   );
 }
+
+/** OrcaSlicer's vendor install: resolve the latest GitHub release tag via the
+ * /releases/latest redirect, download that release's Ubuntu 24.04 AppImage
+ * for this arch, and EXTRACT it (`--appimage-extract` needs no FUSE, which
+ * headless hosts usually lack) into ~/.local/share/orca-slicer, with a tiny
+ * ~/.local/bin/orca-slicer wrapper exec'ing its AppRun. User-local only, no
+ * root. Preferred over Flathub because it needs neither flatpak nor a
+ * configured remote on the target. */
+const ORCA_SLICER_INSTALL =
+  "set -e; " +
+  'case "$(uname -m)" in x86_64) arch="" ;; aarch64|arm64) arch="_aarch64" ;; ' +
+  '*) echo "OrcaSlicer: unsupported architecture $(uname -m)" >&2; exit 1 ;; esac; ' +
+  "tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/SoftFever/OrcaSlicer/releases/latest); " +
+  'tag="${tag##*/}"; ver="${tag#v}"; ' +
+  'tmp="$(mktemp -d)"; ' +
+  'curl -fL -o "$tmp/orca.AppImage" ' +
+  '"https://github.com/SoftFever/OrcaSlicer/releases/download/$tag/OrcaSlicer_Linux_AppImage_Ubuntu2404${arch}_V$ver.AppImage"; ' +
+  'chmod +x "$tmp/orca.AppImage"; ' +
+  '(cd "$tmp" && ./orca.AppImage --appimage-extract >/dev/null); ' +
+  'mkdir -p "$HOME/.local/share" "$HOME/.local/bin"; ' +
+  'rm -rf "$HOME/.local/share/orca-slicer"; ' +
+  'mv "$tmp/squashfs-root" "$HOME/.local/share/orca-slicer"; ' +
+  'echo "$ver" > "$HOME/.local/share/orca-slicer/VERSION"; ' +
+  'printf \'#!/bin/sh\\nexec "$HOME/.local/share/orca-slicer/AppRun" "$@"\\n\' > "$HOME/.local/bin/orca-slicer"; ' +
+  'chmod +x "$HOME/.local/bin/orca-slicer"; ' +
+  'rm -rf "$tmp"';
 export const APPS: CatalogApp[] = [
   {
     id: "git",
@@ -310,6 +336,57 @@ export const APPS: CatalogApp[] = [
     install: { pip: pipInstall("graphifyy") },
     remove: { pip: pipRemove("graphifyy") },
     pip_package: "graphifyy",
+  },
+  {
+    id: "xvfb",
+    name: "Xvfb",
+    description:
+      "Virtual X server with the `xvfb-run` wrapper — lets GUI-toolkit programs " +
+      "(e.g. OrcaSlicer's CLI slicer) run on a headless host.",
+    detect: "command -v xvfb-run",
+    // xvfb-run has no --version; the server it wraps does (on stderr).
+    version: "Xvfb -version 2>&1",
+    packages: {
+      apt: "xvfb",
+      dnf: "xorg-x11-server-Xvfb",
+      pacman: "xorg-server-xvfb",
+      zypper: "xorg-x11-server-Xvfb xvfb-run",
+    },
+    install: {
+      apt: aptInstall("xvfb"),
+      dnf: dnfInstall("xorg-x11-server-Xvfb"),
+      pacman: pacmanInstall("xorg-server-xvfb"),
+      zypper: zypperInstall("xorg-x11-server-Xvfb xvfb-run"),
+    },
+    remove: {
+      apt: aptRemove("xvfb"),
+      dnf: dnfRemove("xorg-x11-server-Xvfb"),
+      pacman: pacmanRemove("xorg-server-xvfb"),
+      zypper: zypperRemove("xorg-x11-server-Xvfb xvfb-run"),
+    },
+  },
+  {
+    id: "orca-slicer",
+    name: "OrcaSlicer",
+    description:
+      "3D-printer slicer (github.com/SoftFever/OrcaSlicer). Not packaged by " +
+      "distros: the latest official AppImage is extracted into " +
+      "~/.local/share/orca-slicer (no FUSE or root needed) behind an " +
+      "~/.local/bin/orca-slicer wrapper. The AppImage targets Ubuntu 24.04 " +
+      "(glibc 2.39+); headless CLI slicing needs Xvfb (`xvfb-run`). An " +
+      "existing Flathub install (com.orcaslicer.OrcaSlicer) also counts.",
+    detect:
+      'command -v orca-slicer || test -x "$HOME/.local/bin/orca-slicer" || ' +
+      "flatpak info com.orcaslicer.OrcaSlicer >/dev/null 2>&1 || " +
+      "flatpak info io.github.softfever.OrcaSlicer >/dev/null 2>&1",
+    version:
+      'cat "$HOME/.local/share/orca-slicer/VERSION" 2>/dev/null || ' +
+      "flatpak info com.orcaslicer.OrcaSlicer 2>/dev/null | awk '$1 == \"Version:\" {print $2}'",
+    install: { vendor: ORCA_SLICER_INSTALL },
+    remove: {
+      vendor:
+        'rm -f "$HOME/.local/bin/orca-slicer" && rm -rf "$HOME/.local/share/orca-slicer"',
+    },
   },
 ];
 

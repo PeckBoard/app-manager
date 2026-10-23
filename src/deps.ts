@@ -22,7 +22,7 @@
 // is stored with an `at` timestamp: it is a SNAPSHOT that drifts with
 // upgrades, not permanent truth. Rendering always reads the cache.
 //
-// Honest limits: vendor curl|sh installs (claude, cursor-agent, ollama)
+// Honest limits: vendor installs (claude, cursor-agent, ollama, orca-slicer)
 // never enter the package database, so they get an explicit "not tracked by
 // the package manager" note instead of an empty tree; pip packages are a
 // different namespace entirely and are kept OUT of the system graph — they
