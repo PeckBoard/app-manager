@@ -63,6 +63,15 @@ behaviour change.
 permission change. OrcaSlicer installs user-local: the latest official
 AppImage is extracted into `~/.local/share/orca-slicer` behind a
 `~/.local/bin/orca-slicer` wrapper.
+**0.8.3 adds `print-bridge` to the catalog** — the Bambu Lab LAN bridge
+print-farm talks to; data only, no permission change. It installs
+user-local with no root: the latest release's static binary (sha256-checked)
+to `~/.local/bin/print-bridge`, a random token to
+`~/.config/print-bridge/token` (mode 600, created only when missing), and a
+systemd **user** unit on `127.0.0.1:7781`, plus best-effort `loginctl
+enable-linger` (without linger it stops at logout). With no systemd user
+manager it refuses before installing anything. Remove keeps the token and
+`~/.local/share/print-bridge`.
 
 ## Dashboard Page
 

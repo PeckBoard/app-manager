@@ -130,6 +130,87 @@ const ORCA_SLICER_INSTALL =
   'printf \'#!/bin/sh\\nexec "$HOME/.local/share/orca-slicer/AppRun" "$@"\\n\' > "$HOME/.local/bin/orca-slicer"; ' +
   'chmod +x "$HOME/.local/bin/orca-slicer"; ' +
   'rm -rf "$tmp"';
+/** `systemctl --user` needs the user's runtime dir; a job spawned outside a
+ * login session may not have XDG_RUNTIME_DIR set, so point it at the
+ * standard /run/user/<uid> when that exists. */
+const SYSTEMD_USER_ENV =
+  'if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/$(id -u)" ]; then ' +
+  'export XDG_RUNTIME_DIR="/run/user/$(id -u)"; fi; ';
+
+/** The print-bridge systemd user unit (mirrors print-bridge.service in the
+ * print-bridge repo). Written with `printf '%s\n'` so systemd's `%h`
+ * specifiers never reach printf's format string. */
+const PRINT_BRIDGE_UNIT_LINES = [
+  "[Unit]",
+  "Description=print-bridge: local HTTP bridge for Bambu Lab printers",
+  "Wants=network-online.target",
+  "After=network-online.target",
+  "",
+  "[Service]",
+  "ExecStart=%h/.local/bin/print-bridge --bind 127.0.0.1:7781 --token-file %h/.config/print-bridge/token",
+  "Environment=RUST_LOG=print_bridge=info",
+  "Restart=on-failure",
+  "RestartSec=5",
+  "NoNewPrivileges=yes",
+  "PrivateTmp=yes",
+  "",
+  "[Install]",
+  "WantedBy=default.target",
+];
+
+/** print-bridge's vendor install (github.com/PeckBoard/print-bridge, the
+ * Bambu Lab LAN bridge print-farm talks to). User-local, no root: the
+ * latest release's static musl binary for this arch (sha256-checked against
+ * its published .sha256) into ~/.local/bin, a random bearer token in
+ * ~/.config/print-bridge/token (mode 600, created only when absent so a
+ * reinstall never rotates a token print-farm already holds), and a systemd
+ * USER unit listening on 127.0.0.1:7781. Refuses up front — before touching
+ * anything — when no systemd user manager is reachable. Linger is
+ * best-effort: without it the service stops when the user logs out. */
+const PRINT_BRIDGE_INSTALL =
+  "set -e; " +
+  SYSTEMD_USER_ENV +
+  "if ! systemctl --user show-environment >/dev/null 2>&1; then " +
+  'echo "print-bridge: no systemd user manager reachable (systemctl --user failed); nothing was installed. ' +
+  "Run it manually instead: download the binary from https://github.com/PeckBoard/print-bridge/releases and start " +
+  'print-bridge --bind 127.0.0.1:7781 --token-file ~/.config/print-bridge/token" >&2; exit 1; fi; ' +
+  'case "$(uname -m)" in x86_64|amd64) arch=x86_64 ;; aarch64|arm64) arch=aarch64 ;; ' +
+  '*) echo "print-bridge: unsupported architecture $(uname -m)" >&2; exit 1 ;; esac; ' +
+  'asset="print-bridge-linux-$arch"; ' +
+  'tmp="$(mktemp -d)"; ' +
+  'curl -fsSL -o "$tmp/$asset" "https://github.com/PeckBoard/print-bridge/releases/latest/download/$asset"; ' +
+  'curl -fsSL -o "$tmp/$asset.sha256" "https://github.com/PeckBoard/print-bridge/releases/latest/download/$asset.sha256"; ' +
+  'want="$(cut -d" " -f1 "$tmp/$asset.sha256")"; got="$(sha256sum "$tmp/$asset" | cut -d" " -f1)"; ' +
+  'if [ "$want" != "$got" ]; then echo "print-bridge: sha256 mismatch for $asset" >&2; rm -rf "$tmp"; exit 1; fi; ' +
+  'mkdir -p "$HOME/.local/bin" "$HOME/.config/print-bridge" "$HOME/.config/systemd/user"; ' +
+  'install -m 755 "$tmp/$asset" "$HOME/.local/bin/print-bridge"; ' +
+  'rm -rf "$tmp"; ' +
+  'if [ ! -e "$HOME/.config/print-bridge/token" ]; then ' +
+  "(umask 077; od -An -N32 -tx1 /dev/urandom | tr -d ' \\n' > \"$HOME/.config/print-bridge/token\"); " +
+  'chmod 600 "$HOME/.config/print-bridge/token"; fi; ' +
+  "printf '%s\\n' " +
+  PRINT_BRIDGE_UNIT_LINES.map((l) => shQuote(l)).join(" ") +
+  ' > "$HOME/.config/systemd/user/print-bridge.service"; ' +
+  "systemctl --user daemon-reload; " +
+  "systemctl --user enable print-bridge; " +
+  // restart, not start: a reinstall must pick up the replaced binary.
+  "systemctl --user restart print-bridge; " +
+  'loginctl enable-linger "${USER:-$(id -un)}" 2>/dev/null || ' +
+  'echo "print-bridge: warning: loginctl enable-linger failed; the service will stop when you log out" >&2; ' +
+  '"$HOME/.local/bin/print-bridge" --version; ' +
+  'echo "print-bridge listening on 127.0.0.1:7781; token in ~/.config/print-bridge/token"';
+
+/** Stops + disables the unit, deletes it and the binary. The token and the
+ * data dir (~/.local/share/print-bridge, printers.json) are kept on purpose
+ * so a reinstall reconnects print-farm with no re-pairing. */
+const PRINT_BRIDGE_REMOVE =
+  SYSTEMD_USER_ENV +
+  "systemctl --user disable --now print-bridge 2>/dev/null || true; " +
+  'rm -f "$HOME/.config/systemd/user/print-bridge.service"; ' +
+  "systemctl --user daemon-reload 2>/dev/null || true; " +
+  'rm -f "$HOME/.local/bin/print-bridge"; ' +
+  'echo "print-bridge removed; kept ~/.config/print-bridge/token and ~/.local/share/print-bridge (delete them by hand to wipe)"';
+
 export const APPS: CatalogApp[] = [
   {
     id: "git",
@@ -387,6 +468,24 @@ export const APPS: CatalogApp[] = [
       vendor:
         'rm -f "$HOME/.local/bin/orca-slicer" && rm -rf "$HOME/.local/share/orca-slicer"',
     },
+  },
+  {
+    id: "print-bridge",
+    name: "print-bridge",
+    description:
+      "Local HTTP bridge for Bambu Lab printers in LAN mode " +
+      "(github.com/PeckBoard/print-bridge) — the daemon the print-farm plugin " +
+      "talks to. User-local, no root: the latest static release binary goes " +
+      "to ~/.local/bin/print-bridge, a random bearer token to " +
+      "~/.config/print-bridge/token (kept across reinstalls and removal), and " +
+      "a systemd user unit serves 127.0.0.1:7781. Needs systemd --user; " +
+      "enables linger when allowed so it keeps running after logout.",
+    detect:
+      'test -x "$HOME/.local/bin/print-bridge" || command -v print-bridge',
+    version:
+      '"$HOME/.local/bin/print-bridge" --version 2>/dev/null || print-bridge --version',
+    install: { vendor: PRINT_BRIDGE_INSTALL },
+    remove: { vendor: PRINT_BRIDGE_REMOVE },
   },
 ];
 

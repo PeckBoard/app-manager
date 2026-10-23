@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
 import {
   APPS,
   findApp,
@@ -9,7 +10,13 @@ import {
 } from "../src/catalog";
 
 const PMS = ["apt", "dnf", "pacman", "zypper"] as const;
-const VENDOR_ONLY = ["claude", "cursor-agent", "ollama", "orca-slicer"];
+const VENDOR_ONLY = [
+  "claude",
+  "cursor-agent",
+  "ollama",
+  "orca-slicer",
+  "print-bridge",
+];
 const PM_APPS = ["git", "node", "docker", "ripgrep", "xvfb"];
 
 describe("catalog", () => {
@@ -120,6 +127,37 @@ describe("catalog", () => {
     });
   });
 
+  it("print-bridge installs a user-local binary, token and systemd user unit", () => {
+    const app = findApp("print-bridge")!;
+    expect(isVendorApp(app)).toBe(true);
+    const install = app.install.vendor!;
+    const remove = app.remove.vendor!;
+    for (const script of [install, remove]) {
+      expect(script).not.toContain("sudo");
+      // Valid POSIX sh.
+      execFileSync("sh", ["-n", "-c", script]);
+    }
+    expect(install).toContain(
+      "https://github.com/PeckBoard/print-bridge/releases/latest/download/$asset",
+    );
+    expect(install).toContain("sha256sum");
+    // Refuses before touching anything without a systemd user manager.
+    expect(install.indexOf("systemctl --user show-environment")).toBeLessThan(
+      install.indexOf("curl"),
+    );
+    // Token only minted when absent, never rotated by a reinstall.
+    expect(install).toContain('if [ ! -e "$HOME/.config/print-bridge/token" ]');
+    expect(install).toContain(
+      "'ExecStart=%h/.local/bin/print-bridge --bind 127.0.0.1:7781 --token-file %h/.config/print-bridge/token'",
+    );
+    expect(install).toContain("systemctl --user enable print-bridge");
+    expect(install).toContain("loginctl enable-linger");
+    expect(remove).toContain("systemctl --user disable --now print-bridge");
+    expect(remove).toContain('rm -f "$HOME/.local/bin/print-bridge"');
+    expect(remove).not.toContain('token"');
+    expect(remove).not.toContain("rm -rf");
+    expect(app.version).toContain("--version");
+  });
   describe("python / pip namespace entries", () => {
     it("python3 and pip are normal distro-packaged apps", () => {
       for (const id of ["python3", "pip"]) {
