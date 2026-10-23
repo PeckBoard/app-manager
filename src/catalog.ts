@@ -105,13 +105,69 @@ function pipFreezeVersion(pkg: string): string {
   );
 }
 
+/** Host libraries OrcaSlicer's AppImage links against but doesn't bundle,
+ * which minimal / server hosts often lack (Ubuntu 26.04 has no libGLU by
+ * default) → `deb|rpm` candidate packages (first that downloads wins).
+ * Unmapped libs fall back to the Debian guess `libfoo.so.N` → `libfooN`. */
+const ORCA_LIB_PACKAGES: Record<string, [string, string]> = {
+  "libGLU.so.1": ["libglu1-mesa", "mesa-libGLU"],
+  "libGL.so.1": ["libgl1", "libglvnd-glx"],
+  "libOpenGL.so.0": ["libopengl0", "libglvnd-opengl"],
+  "libEGL.so.1": ["libegl1", "libglvnd-egl"],
+  "libGLX.so.0": ["libglx0", "libglvnd-glx"],
+  "libgtk-3.so.0": ["libgtk-3-0t64 libgtk-3-0", "gtk3"],
+  "libwebkit2gtk-4.1.so.0": ["libwebkit2gtk-4.1-0", "webkit2gtk4.1"],
+  "libgstreamer-1.0.so.0": ["libgstreamer1.0-0", "gstreamer1"],
+  "libSM.so.6": ["libsm6", "libSM"],
+  "libXxf86vm.so.1": ["libxxf86vm1", "libXxf86vm"],
+};
+
+/** After extracting: `ldd` the binary (with the dirs its launcher adds) and
+ * fetch every "not found" library WITHOUT root — `apt-get download` +
+ * `dpkg-deb -x`, or `dnf download` + `rpm2cpio | cpio` — into
+ * ~/.local/share/orca-slicer/extra-lib, which the wrapper puts on
+ * LD_LIBRARY_PATH (the binary's RUNPATH is a CI build dir). Fails, naming
+ * them, when some stay missing. Mirrors print-farm's setup.ts fix_libs. */
+const ORCA_FIX_LIBS = [
+  "set +e",
+  "pkgs_for() {",
+  '  case "$1:$2" in',
+  ...Object.entries(ORCA_LIB_PACKAGES).flatMap(([lib, [deb, rpm]]) => [`    ${lib}:deb) echo ${deb} ;;`, `    ${lib}:rpm) echo ${rpm} ;;`]),
+  '    *:deb) b=${1%%.so*}; v=${1##*.so.}; [ "$v" = "$1" ] && v=""; g=$(printf %s "$b$v" | tr A-Z_ a-z-); echo "$g" "${g}t64" ;;',
+  "    *) echo ;;",
+  "  esac",
+  "}",
+  'O="$HOME/.local/share/orca-slicer"; X="$O/extra-lib"',
+  'missing() { LD_LIBRARY_PATH="$X:$O/lib/orca-runtime:$O/lib:$O/bin" ldd "$O/bin/orca-slicer" 2>/dev/null | awk \'/not found/{print $1}\' | sort -u; }',
+  'm=""; [ -x "$O/bin/orca-slicer" ] && command -v ldd >/dev/null 2>&1 && m=$(missing)',
+  'if [ -n "$m" ]; then',
+  '  echo "OrcaSlicer can\'t load: $(echo $m) — fetching without root"',
+  "  if command -v apt-get >/dev/null 2>&1 && command -v dpkg-deb >/dev/null 2>&1; then pm=deb",
+  "  elif command -v dnf >/dev/null 2>&1 && command -v rpm2cpio >/dev/null 2>&1 && command -v cpio >/dev/null 2>&1; then pm=rpm",
+  '  else echo "OrcaSlicer needs $(echo $m); install it with your package manager" >&2; exit 1; fi',
+  '  mkdir -p "$X"; t="$(mktemp -d)"',
+  "  for lib in $m; do",
+  '    for p in $(pkgs_for "$lib" "$pm"); do',
+  '      rm -rf "$t/pkg" "$t/x"; mkdir -p "$t/pkg" "$t/x"',
+  '      if [ "$pm" = deb ]; then (cd "$t/pkg" && apt-get download "$p" >/dev/null 2>&1) || continue; for f in "$t"/pkg/*.deb; do dpkg-deb -x "$f" "$t/x"; done',
+  '      else (cd "$t/pkg" && dnf download -q "$p" >/dev/null 2>&1) || continue; for f in "$t"/pkg/*.rpm; do (cd "$t/x" && rpm2cpio "$f" | cpio -idm --quiet); done; fi',
+  '      n=0; for f in $(find "$t/x" \\( -type f -o -type l \\) -name "$lib*"); do cp -P "$f" "$X/" && n=$((n + 1)); done',
+  '      [ "$n" -gt 0 ] && { echo "fetched $lib from $p"; break; }',
+  "    done",
+  "  done",
+  '  rm -rf "$t"; left=$(missing)',
+  '  [ -z "$left" ] || { echo "OrcaSlicer still can\'t load $(echo $left) — install the package(s) providing them" >&2; exit 1; }',
+  "fi",
+].join("\n");
+
 /** OrcaSlicer's vendor install: resolve the latest GitHub release tag via the
  * /releases/latest redirect, download that release's Ubuntu 24.04 AppImage
  * for this arch, and EXTRACT it (`--appimage-extract` needs no FUSE, which
  * headless hosts usually lack) into ~/.local/share/orca-slicer, with a tiny
- * ~/.local/bin/orca-slicer wrapper exec'ing its AppRun. User-local only, no
- * root. Preferred over Flathub because it needs neither flatpak nor a
- * configured remote on the target. */
+ * ~/.local/bin/orca-slicer wrapper exec'ing its AppRun (with extra-lib on
+ * LD_LIBRARY_PATH), then fetch any host libraries it can't load
+ * (ORCA_FIX_LIBS). User-local only, no root. Preferred over Flathub because
+ * it needs neither flatpak nor a configured remote on the target. */
 const ORCA_SLICER_INSTALL =
   "set -e; " +
   'case "$(uname -m)" in x86_64) arch="" ;; aarch64|arm64) arch="_aarch64" ;; ' +
@@ -124,12 +180,15 @@ const ORCA_SLICER_INSTALL =
   'chmod +x "$tmp/orca.AppImage"; ' +
   '(cd "$tmp" && ./orca.AppImage --appimage-extract >/dev/null); ' +
   'mkdir -p "$HOME/.local/share" "$HOME/.local/bin"; ' +
+  'if [ -d "$HOME/.local/share/orca-slicer/extra-lib" ]; then mv "$HOME/.local/share/orca-slicer/extra-lib" "$tmp/extra-lib"; fi; ' +
   'rm -rf "$HOME/.local/share/orca-slicer"; ' +
   'mv "$tmp/squashfs-root" "$HOME/.local/share/orca-slicer"; ' +
+  'if [ -d "$tmp/extra-lib" ]; then mv "$tmp/extra-lib" "$HOME/.local/share/orca-slicer/extra-lib"; fi; ' +
   'echo "$ver" > "$HOME/.local/share/orca-slicer/VERSION"; ' +
-  'printf \'#!/bin/sh\\nexec "$HOME/.local/share/orca-slicer/AppRun" "$@"\\n\' > "$HOME/.local/bin/orca-slicer"; ' +
+  'printf \'#!/bin/sh\\nexport LD_LIBRARY_PATH="$HOME/.local/share/orca-slicer/extra-lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\\nexec "$HOME/.local/share/orca-slicer/AppRun" "$@"\\n\' > "$HOME/.local/bin/orca-slicer"; ' +
   'chmod +x "$HOME/.local/bin/orca-slicer"; ' +
-  'rm -rf "$tmp"';
+  'rm -rf "$tmp"\n' +
+  ORCA_FIX_LIBS;
 /** `systemctl --user` needs the user's runtime dir; a job spawned outside a
  * login session may not have XDG_RUNTIME_DIR set, so point it at the
  * standard /run/user/<uid> when that exists. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   APPS,
   findApp,
@@ -120,6 +120,15 @@ describe("catalog", () => {
       expect(install).toContain("--appimage-extract");
       expect(install).toContain('"$HOME/.local/bin/orca-slicer"');
       expect(install).not.toContain("sudo");
+      // Missing host libs (e.g. libGLU on Ubuntu 26.04) are fetched rootless
+      // into extra-lib, which the wrapper puts on LD_LIBRARY_PATH.
+      expect(install).toContain("apt-get download");
+      expect(install).toContain("dpkg-deb -x");
+      expect(install).toContain("libGLU.so.1:deb) echo libglu1-mesa ;;");
+      expect(install).toContain(
+        'export LD_LIBRARY_PATH="$HOME/.local/share/orca-slicer/extra-lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\\nexec "$HOME/.local/share/orca-slicer/AppRun" "$@"',
+      );
+      expect(spawnSync("sh", ["-n", "-c", install]).status).toBe(0);
       expect(app.remove.vendor).toContain("$HOME/.local/share/orca-slicer");
       // A pre-existing Flathub install counts as present.
       expect(app.detect).toContain("command -v orca-slicer");
