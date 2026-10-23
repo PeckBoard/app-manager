@@ -132,7 +132,10 @@ const ORCA_FIX_LIBS = [
   "set +e",
   "pkgs_for() {",
   '  case "$1:$2" in',
-  ...Object.entries(ORCA_LIB_PACKAGES).flatMap(([lib, [deb, rpm]]) => [`    ${lib}:deb) echo ${deb} ;;`, `    ${lib}:rpm) echo ${rpm} ;;`]),
+  ...Object.entries(ORCA_LIB_PACKAGES).flatMap(([lib, [deb, rpm]]) => [
+    `    ${lib}:deb) echo ${deb} ;;`,
+    `    ${lib}:rpm) echo ${rpm} ;;`,
+  ]),
   '    *:deb) b=${1%%.so*}; v=${1##*.so.}; [ "$v" = "$1" ] && v=""; g=$(printf %s "$b$v" | tr A-Z_ a-z-); echo "$g" "${g}t64" ;;',
   "    *) echo ;;",
   "  esac",
@@ -270,6 +273,25 @@ const PRINT_BRIDGE_REMOVE =
   'rm -f "$HOME/.local/bin/print-bridge"; ' +
   'echo "print-bridge removed; kept ~/.config/print-bridge/token and ~/.local/share/print-bridge (delete them by hand to wipe)"';
 
+/** mcpx's vendor install (github.com/PeckBoard/mcpx, the MCP client CLI +
+ * local gateway). User-local, no root: the latest release's static musl
+ * binary for this arch, sha256-checked against its published .sha256, into
+ * ~/.local/bin/mcpx. No service — `mcpx serve` is started by whoever wants
+ * the gateway. Config and tokens (~/.config/mcpx) are never touched. */
+const MCPX_INSTALL =
+  "set -e; " +
+  'case "$(uname -m)" in x86_64|amd64) arch=x86_64 ;; aarch64|arm64) arch=aarch64 ;; ' +
+  '*) echo "mcpx: unsupported architecture $(uname -m)" >&2; exit 1 ;; esac; ' +
+  'asset="mcpx-linux-$arch"; ' +
+  'tmp="$(mktemp -d)"; ' +
+  'curl -fsSL -o "$tmp/$asset" "https://github.com/PeckBoard/mcpx/releases/latest/download/$asset"; ' +
+  'curl -fsSL -o "$tmp/$asset.sha256" "https://github.com/PeckBoard/mcpx/releases/latest/download/$asset.sha256"; ' +
+  'want="$(cut -d" " -f1 "$tmp/$asset.sha256")"; got="$(sha256sum "$tmp/$asset" | cut -d" " -f1)"; ' +
+  'if [ "$want" != "$got" ]; then echo "mcpx: sha256 mismatch for $asset" >&2; rm -rf "$tmp"; exit 1; fi; ' +
+  'mkdir -p "$HOME/.local/bin"; ' +
+  'install -m 755 "$tmp/$asset" "$HOME/.local/bin/mcpx"; ' +
+  'rm -rf "$tmp"; ' +
+  '"$HOME/.local/bin/mcpx" --version';
 export const APPS: CatalogApp[] = [
   {
     id: "git",
@@ -545,6 +567,24 @@ export const APPS: CatalogApp[] = [
       '"$HOME/.local/bin/print-bridge" --version 2>/dev/null || print-bridge --version',
     install: { vendor: PRINT_BRIDGE_INSTALL },
     remove: { vendor: PRINT_BRIDGE_REMOVE },
+  },
+  {
+    id: "mcpx",
+    name: "mcpx",
+    description:
+      "MCP client CLI + local gateway (github.com/PeckBoard/mcpx): call the " +
+      "tools of any server in an mcp.json (stdio or HTTP, with OAuth) from " +
+      "scripts and bots, or run `mcpx serve` to expose them all on one local " +
+      "MCP/REST endpoint. User-local, no root: the latest static release " +
+      "binary goes to ~/.local/bin/mcpx; config and tokens in ~/.config/mcpx " +
+      "are kept on removal.",
+    detect: 'test -x "$HOME/.local/bin/mcpx" || command -v mcpx',
+    version: '"$HOME/.local/bin/mcpx" --version 2>/dev/null || mcpx --version',
+    install: { vendor: MCPX_INSTALL },
+    remove: {
+      vendor:
+        'rm -f "$HOME/.local/bin/mcpx"; echo "mcpx removed; kept ~/.config/mcpx (delete it by hand to wipe tokens)"',
+    },
   },
 ];
 

@@ -16,6 +16,8 @@ const VENDOR_ONLY = [
   "ollama",
   "orca-slicer",
   "print-bridge",
+  "print-bridge",
+  "mcpx",
 ];
 const PM_APPS = ["git", "node", "docker", "ripgrep", "xvfb"];
 
@@ -166,6 +168,20 @@ describe("catalog", () => {
     expect(remove).not.toContain('token"');
     expect(remove).not.toContain("rm -rf");
     expect(app.version).toContain("--version");
+  });
+  it("mcpx installs a sha256-checked user-local binary and keeps its config", () => {
+    const app = findApp("mcpx")!;
+    const install = installRecipeFor(app, "apt")!;
+    expect(install).toContain(
+      "https://github.com/PeckBoard/mcpx/releases/latest/download/$asset",
+    );
+    expect(install).toContain("sha256 mismatch");
+    expect(install).toContain(
+      'install -m 755 "$tmp/$asset" "$HOME/.local/bin/mcpx"',
+    );
+    expect(install).not.toContain("systemctl");
+    expect(app.remove.vendor).toContain('rm -f "$HOME/.local/bin/mcpx"');
+    expect(app.remove.vendor).not.toContain('.config/mcpx"');
   });
   describe("python / pip namespace entries", () => {
     it("python3 and pip are normal distro-packaged apps", () => {
