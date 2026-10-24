@@ -16,7 +16,7 @@ const VENDOR_ONLY = [
   "ollama",
   "orca-slicer",
   "print-bridge",
-  "print-bridge",
+  "homekit-bridge",
   "mcpx",
 ];
 const PM_APPS = ["git", "node", "docker", "ripgrep", "xvfb"];
@@ -168,6 +168,47 @@ describe("catalog", () => {
     expect(remove).not.toContain('token"');
     expect(remove).not.toContain("rm -rf");
     expect(app.version).toContain("--version");
+  });
+  it("homekit-bridge installs a bundle behind a node-pinning wrapper, token and user unit", () => {
+    const app = findApp("homekit-bridge")!;
+    expect(isVendorApp(app)).toBe(true);
+    const install = app.install.vendor!;
+    const remove = app.remove.vendor!;
+    for (const script of [install, remove]) {
+      expect(script).not.toContain("sudo");
+      execFileSync("sh", ["-n", "-c", script]);
+    }
+    expect(install.indexOf("systemctl --user show-environment")).toBeLessThan(
+      install.indexOf("curl"),
+    );
+    // Too-old distro node falls back to a sha256-checked private Node 22.
+    expect(install).toContain("process.versions.node");
+    expect(install).toContain("https://nodejs.org/dist/latest-v22.x");
+    expect(install).toContain(
+      "https://github.com/PeckBoard/homekit-bridge/releases/latest/download/$asset",
+    );
+    expect(install.split("sha256sum").length - 1).toBe(2);
+    expect(install).toContain(
+      'if [ ! -e "$HOME/.config/homekit-bridge/token" ]',
+    );
+    expect(install).toContain(
+      "'ExecStart=%h/.local/bin/homekit-bridge --bind 127.0.0.1:7782 --token-file %h/.config/homekit-bridge/token'",
+    );
+    expect(remove).toContain("systemctl --user disable --now homekit-bridge");
+    // Pairings (accessory keys) and the token survive removal.
+    expect(remove).not.toContain(".local/share/homekit-bridge\"");
+    expect(remove).not.toContain('token"');
+  });
+
+  it("homekit-bridge's wrapper pins the resolved node and forwards args", () => {
+    const install = findApp("homekit-bridge")!.install.vendor!;
+    const m = install.match(/printf '#!\/bin\/sh[^']*' [^>]+/);
+    expect(m).not.toBeNull();
+    const out = execFileSync("sh", [
+      "-c",
+      `node_bin=/opt/n/bin/node; lib=/l; asset=a.mjs; ${m![0]}`,
+    ]).toString();
+    expect(out).toBe('#!/bin/sh\nexec "/opt/n/bin/node" "/l/a.mjs" "$@"\n');
   });
   it("mcpx installs a sha256-checked user-local binary and keeps its config", () => {
     const app = findApp("mcpx")!;

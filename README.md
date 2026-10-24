@@ -72,6 +72,15 @@ systemd **user** unit on `127.0.0.1:7781`, plus best-effort `loginctl
 enable-linger` (without linger it stops at logout). With no systemd user
 manager it refuses before installing anything. Remove keeps the token and
 `~/.local/share/print-bridge`.
+**0.8.6 adds `homekit-bridge` to the catalog** — the HomeKit IP controller
+the homekit plugin talks to; data only, no permission change. User-local, no
+root: the release's single Node bundle (sha256-checked) into
+`~/.local/lib/homekit-bridge` behind a `~/.local/bin/homekit-bridge` wrapper
+that pins the node binary. It uses the system `node` when it is 20 or newer,
+otherwise a private official Node 22 (sha256-checked against
+`SHASUMS256.txt`). Token in `~/.config/homekit-bridge/token`, systemd **user**
+unit on `127.0.0.1:7782`. Remove keeps the token and
+`~/.local/share/homekit-bridge` (the accessory pairings).
 
 ## Dashboard Page
 

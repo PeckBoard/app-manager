@@ -273,6 +273,97 @@ const PRINT_BRIDGE_REMOVE =
   'rm -f "$HOME/.local/bin/print-bridge"; ' +
   'echo "print-bridge removed; kept ~/.config/print-bridge/token and ~/.local/share/print-bridge (delete them by hand to wipe)"';
 
+/** The homekit-bridge systemd user unit (mirrors homekit-bridge.service in
+ * the homekit-bridge repo). Runs the wrapper, which pins the node binary. */
+const HOMEKIT_BRIDGE_UNIT_LINES = [
+  "[Unit]",
+  "Description=homekit-bridge: local HTTP bridge that controls HomeKit IP accessories",
+  "Wants=network-online.target",
+  "After=network-online.target",
+  "",
+  "[Service]",
+  "ExecStart=%h/.local/bin/homekit-bridge --bind 127.0.0.1:7782 --token-file %h/.config/homekit-bridge/token",
+  "Restart=on-failure",
+  "RestartSec=5",
+  "NoNewPrivileges=yes",
+  "PrivateTmp=yes",
+  "",
+  "[Install]",
+  "WantedBy=default.target",
+];
+
+/** homekit-bridge's vendor install (github.com/PeckBoard/homekit-bridge, the
+ * HomeKit IP controller the homekit plugin talks to). User-local, no root.
+ * The release is one Node bundle (sha256-checked) in ~/.local/lib/homekit-bridge.
+ * Node >= 20 is required and distro packages often lag (Ubuntu 24.04 ships
+ * 18), so a too-old or missing system node gets a private official Node 22
+ * build (sha256-checked against SHASUMS256.txt) next to the bundle. The
+ * ~/.local/bin/homekit-bridge wrapper hard-codes the node it resolved, so
+ * the systemd unit works even when node lives on an nvm-only PATH. Token in
+ * ~/.config/homekit-bridge/token (mode 600, created only when absent). Refuses
+ * up front — before touching anything — without a systemd user manager. */
+const HOMEKIT_BRIDGE_INSTALL =
+  "set -e; " +
+  SYSTEMD_USER_ENV +
+  "if ! systemctl --user show-environment >/dev/null 2>&1; then " +
+  'echo "homekit-bridge: no systemd user manager reachable (systemctl --user failed); nothing was installed. ' +
+  "Run it manually instead: download homekit-bridge.mjs from https://github.com/PeckBoard/homekit-bridge/releases and start " +
+  'node homekit-bridge.mjs --bind 127.0.0.1:7782 --token-file ~/.config/homekit-bridge/token" >&2; exit 1; fi; ' +
+  'lib="$HOME/.local/lib/homekit-bridge"; tmp="$(mktemp -d)"; ' +
+  'node_bin=""; if command -v node >/dev/null 2>&1 && ' +
+  "node -e 'process.exit(+process.versions.node.split(\".\")[0] >= 20 ? 0 : 1)'; then " +
+  'node_bin="$(command -v node)"; ' +
+  'else case "$(uname -m)" in x86_64|amd64) narch=x64 ;; aarch64|arm64) narch=arm64 ;; ' +
+  '*) echo "homekit-bridge: unsupported architecture $(uname -m)" >&2; exit 1 ;; esac; ' +
+  'base="https://nodejs.org/dist/latest-v22.x"; ' +
+  'curl -fsSL -o "$tmp/SHASUMS256.txt" "$base/SHASUMS256.txt"; ' +
+  'line="$(awk -v a="linux-$narch.tar.gz" \'index($2, a) && $2 ~ /^node-v22/ {print; exit}\' "$tmp/SHASUMS256.txt")"; ' +
+  'want="${line%% *}"; tarball="${line##* }"; ' +
+  'if [ -z "$tarball" ]; then echo "homekit-bridge: no Node 22 build for linux-$narch" >&2; rm -rf "$tmp"; exit 1; fi; ' +
+  'echo "homekit-bridge: system Node.js is missing or older than 20; fetching private $tarball"; ' +
+  'curl -fsSL -o "$tmp/$tarball" "$base/$tarball"; ' +
+  'got="$(sha256sum "$tmp/$tarball" | cut -d" " -f1)"; ' +
+  'if [ "$want" != "$got" ]; then echo "homekit-bridge: sha256 mismatch for $tarball" >&2; rm -rf "$tmp"; exit 1; fi; ' +
+  'rm -rf "$lib/node"; mkdir -p "$lib/node"; ' +
+  'tar -xzf "$tmp/$tarball" -C "$lib/node" --strip-components=1; ' +
+  'node_bin="$lib/node/bin/node"; fi; ' +
+  'asset="homekit-bridge.mjs"; ' +
+  'curl -fsSL -o "$tmp/$asset" "https://github.com/PeckBoard/homekit-bridge/releases/latest/download/$asset"; ' +
+  'curl -fsSL -o "$tmp/$asset.sha256" "https://github.com/PeckBoard/homekit-bridge/releases/latest/download/$asset.sha256"; ' +
+  'want="$(cut -d" " -f1 "$tmp/$asset.sha256")"; got="$(sha256sum "$tmp/$asset" | cut -d" " -f1)"; ' +
+  'if [ "$want" != "$got" ]; then echo "homekit-bridge: sha256 mismatch for $asset" >&2; rm -rf "$tmp"; exit 1; fi; ' +
+  'mkdir -p "$lib" "$HOME/.local/bin" "$HOME/.config/homekit-bridge" "$HOME/.config/systemd/user"; ' +
+  'install -m 644 "$tmp/$asset" "$lib/$asset"; ' +
+  'rm -rf "$tmp"; ' +
+  "printf '#!/bin/sh\\nexec \"%s\" \"%s\" \"$@\"\\n' \"$node_bin\" \"$lib/$asset\" > \"$HOME/.local/bin/homekit-bridge\"; " +
+  'chmod 755 "$HOME/.local/bin/homekit-bridge"; ' +
+  'if [ ! -e "$HOME/.config/homekit-bridge/token" ]; then ' +
+  "(umask 077; od -An -N32 -tx1 /dev/urandom | tr -d ' \\n' > \"$HOME/.config/homekit-bridge/token\"); " +
+  'chmod 600 "$HOME/.config/homekit-bridge/token"; fi; ' +
+  "printf '%s\\n' " +
+  HOMEKIT_BRIDGE_UNIT_LINES.map((l) => shQuote(l)).join(" ") +
+  ' > "$HOME/.config/systemd/user/homekit-bridge.service"; ' +
+  "systemctl --user daemon-reload; " +
+  "systemctl --user enable homekit-bridge; " +
+  // restart, not start: a reinstall must pick up the replaced bundle.
+  "systemctl --user restart homekit-bridge; " +
+  'loginctl enable-linger "${USER:-$(id -un)}" 2>/dev/null || ' +
+  'echo "homekit-bridge: warning: loginctl enable-linger failed; the service will stop when you log out" >&2; ' +
+  '"$HOME/.local/bin/homekit-bridge" --version; ' +
+  'echo "homekit-bridge listening on 127.0.0.1:7782; token in ~/.config/homekit-bridge/token"';
+
+/** Stops + disables the unit, deletes it, the wrapper, the bundle and any
+ * private node. The token and the data dir (~/.local/share/homekit-bridge,
+ * pairings.json — the accessory keys) are kept on purpose: losing
+ * pairings.json means factory-resetting every paired accessory. */
+const HOMEKIT_BRIDGE_REMOVE =
+  SYSTEMD_USER_ENV +
+  "systemctl --user disable --now homekit-bridge 2>/dev/null || true; " +
+  'rm -f "$HOME/.config/systemd/user/homekit-bridge.service"; ' +
+  "systemctl --user daemon-reload 2>/dev/null || true; " +
+  'rm -f "$HOME/.local/bin/homekit-bridge"; rm -rf "$HOME/.local/lib/homekit-bridge"; ' +
+  'echo "homekit-bridge removed; kept ~/.config/homekit-bridge/token and ~/.local/share/homekit-bridge (pairings — delete by hand to wipe)"';
+
 /** mcpx's vendor install (github.com/PeckBoard/mcpx, the MCP client CLI +
  * local gateway). User-local, no root: the latest release's static musl
  * binary for this arch, sha256-checked against its published .sha256, into
@@ -567,6 +658,24 @@ export const APPS: CatalogApp[] = [
       '"$HOME/.local/bin/print-bridge" --version 2>/dev/null || print-bridge --version',
     install: { vendor: PRINT_BRIDGE_INSTALL },
     remove: { vendor: PRINT_BRIDGE_REMOVE },
+  },
+  {
+    id: "homekit-bridge",
+    name: "homekit-bridge",
+    description:
+      "Local HTTP bridge that controls HomeKit IP accessories " +
+      "(github.com/PeckBoard/homekit-bridge) — the daemon the homekit plugin " +
+      "talks to. User-local, no root: the latest single-file release goes to " +
+      "~/.local/lib/homekit-bridge behind a ~/.local/bin/homekit-bridge " +
+      "wrapper, using the system Node.js when it is 20 or newer and otherwise " +
+      "a private official Node 22 build; a random bearer token goes to " +
+      "~/.config/homekit-bridge/token (kept across reinstalls and removal), " +
+      "and a systemd user unit serves 127.0.0.1:7782. Needs systemd --user; " +
+      "enables linger when allowed so it keeps running after logout.",
+    detect: 'test -x "$HOME/.local/bin/homekit-bridge"',
+    version: '"$HOME/.local/bin/homekit-bridge" --version 2>/dev/null',
+    install: { vendor: HOMEKIT_BRIDGE_INSTALL },
+    remove: { vendor: HOMEKIT_BRIDGE_REMOVE },
   },
   {
     id: "mcpx",
