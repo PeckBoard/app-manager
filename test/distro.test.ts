@@ -1,5 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { detectPackageManager, parseOsRelease } from "../src/distro";
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  OS_RELEASE_PROBE,
+  detectPackageManager,
+  parseOsRelease,
+} from "../src/distro";
+
+describe("OS_RELEASE_PROBE", () => {
+  it("answers ID=macos on Darwin, which has no /etc/os-release", () => {
+    const bin = mkdtempSync(join(tmpdir(), "lam-probe-"));
+    for (const [name, body] of [
+      ["cat", "exit 1"],
+      ["uname", "echo Darwin"],
+    ]) {
+      writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
+      chmodSync(join(bin, name), 0o755);
+    }
+    const out = execFileSync("/bin/sh", ["-c", OS_RELEASE_PROBE], {
+      env: { PATH: bin },
+    }).toString();
+    rmSync(bin, { recursive: true, force: true });
+    const release = parseOsRelease(out);
+    expect(release).toEqual({ id: "macos", idLike: [] });
+    expect(detectPackageManager(release)).toBeNull();
+  });
+});
 
 describe("parseOsRelease", () => {
   it("parses quoted and unquoted KEY=VALUE lines", () => {

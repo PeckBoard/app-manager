@@ -365,20 +365,30 @@ const HOMEKIT_BRIDGE_REMOVE =
   'echo "homekit-bridge removed; kept ~/.config/homekit-bridge/token and ~/.local/share/homekit-bridge (pairings — delete by hand to wipe)"';
 
 /** mcpx's vendor install (github.com/PeckBoard/mcpx, the MCP client CLI +
- * local gateway). User-local, no root: the latest release's static musl
- * binary for this arch, sha256-checked against its published .sha256, into
- * ~/.local/bin/mcpx. No service — `mcpx serve` is started by whoever wants
- * the gateway. Config and tokens (~/.config/mcpx) are never touched. */
+ * local gateway). User-local, no root: the latest release's binary for this
+ * OS + arch (static musl `mcpx-linux-<arch>` on Linux, `mcpx-macos-<arch>`
+ * on macOS), sha256-checked against its published .sha256 (`shasum -a 256`
+ * where macOS lacks sha256sum), into ~/.local/bin/mcpx. No service — `mcpx
+ * serve` is started by whoever wants the gateway. Config and tokens
+ * (~/.config/mcpx) are never touched. */
 const MCPX_INSTALL =
   "set -e; " +
+  'case "$(uname -s)" in Linux) os=linux ;; Darwin) os=macos ;; ' +
+  '*) echo "mcpx: unsupported OS $(uname -s)" >&2; exit 1 ;; esac; ' +
   'case "$(uname -m)" in x86_64|amd64) arch=x86_64 ;; aarch64|arm64) arch=aarch64 ;; ' +
   '*) echo "mcpx: unsupported architecture $(uname -m)" >&2; exit 1 ;; esac; ' +
-  'asset="mcpx-linux-$arch"; ' +
+  'asset="mcpx-$os-$arch"; ' +
   'tmp="$(mktemp -d)"; ' +
   'curl -fsSL -o "$tmp/$asset" "https://github.com/PeckBoard/mcpx/releases/latest/download/$asset"; ' +
   'curl -fsSL -o "$tmp/$asset.sha256" "https://github.com/PeckBoard/mcpx/releases/latest/download/$asset.sha256"; ' +
-  'want="$(cut -d" " -f1 "$tmp/$asset.sha256")"; got="$(sha256sum "$tmp/$asset" | cut -d" " -f1)"; ' +
+  'want="$(cut -d" " -f1 "$tmp/$asset.sha256")"; ' +
+  'if command -v sha256sum >/dev/null 2>&1; then got="$(sha256sum "$tmp/$asset" | cut -d" " -f1)"; ' +
+  'else got="$(shasum -a 256 "$tmp/$asset" | cut -d" " -f1)"; fi; ' +
   'if [ "$want" != "$got" ]; then echo "mcpx: sha256 mismatch for $asset" >&2; rm -rf "$tmp"; exit 1; fi; ' +
+  'mkdir -p "$HOME/.local/bin"; ' +
+  'install -m 755 "$tmp/$asset" "$HOME/.local/bin/mcpx"; ' +
+  'rm -rf "$tmp"; ' +
+  '"$HOME/.local/bin/mcpx" --version';
   'mkdir -p "$HOME/.local/bin"; ' +
   'install -m 755 "$tmp/$asset" "$HOME/.local/bin/mcpx"; ' +
   'rm -rf "$tmp"; ' +
@@ -684,9 +694,9 @@ export const APPS: CatalogApp[] = [
       "MCP client CLI + local gateway (github.com/PeckBoard/mcpx): call the " +
       "tools of any server in an mcp.json (stdio or HTTP, with OAuth) from " +
       "scripts and bots, or run `mcpx serve` to expose them all on one local " +
-      "MCP/REST endpoint. User-local, no root: the latest static release " +
-      "binary goes to ~/.local/bin/mcpx; config and tokens in ~/.config/mcpx " +
-      "are kept on removal.",
+      "MCP/REST endpoint. User-local, no root: the latest release binary for " +
+      "the target's OS (Linux or macOS) and arch goes to ~/.local/bin/mcpx; " +
+      "config and tokens in ~/.config/mcpx are kept on removal.",
     detect: 'test -x "$HOME/.local/bin/mcpx" || command -v mcpx',
     version: '"$HOME/.local/bin/mcpx" --version 2>/dev/null || mcpx --version',
     install: { vendor: MCPX_INSTALL },

@@ -5,7 +5,10 @@
 
 export type PackageManager = "apt" | "dnf" | "pacman" | "zypper";
 
-export const OS_RELEASE_PROBE = "cat /etc/os-release 2>/dev/null";
+/** macOS has no /etc/os-release; it answers `ID=macos` so it probes as a
+ * target with no package manager (vendor recipes only). */
+export const OS_RELEASE_PROBE =
+  'cat /etc/os-release 2>/dev/null || { [ "$(uname -s)" = Darwin ] && echo ID=macos; }';
 
 export interface OsRelease {
   id: string;

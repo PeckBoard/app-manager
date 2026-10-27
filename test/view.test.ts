@@ -76,11 +76,11 @@ describe("distroView", () => {
   it("refuses a target that is not a readable Linux host, in prose", () => {
     const v = distroView(
       null,
-      "could not read /etc/os-release on target 'local'; this plugin only supports Linux targets",
+      "could not read /etc/os-release on target 'local'; this plugin only supports Linux and macOS targets",
     );
     expect(v.supported).toBe(false);
     expect(v.refusal).toContain(
-      "could not identify this target as a Linux host",
+      "could not identify this target as a Linux or macOS host",
     );
     expect(v.refusal).not.toContain("{");
   });
@@ -370,7 +370,7 @@ describe("friendlyError", () => {
   it("explains an unreadable /etc/os-release", () => {
     expect(
       friendlyError("could not read /etc/os-release on target 'x'"),
-    ).toContain("Only Linux targets can be managed here.");
+    ).toContain("Only Linux and macOS targets can be managed here.");
   });
 
   it("explains an unreachable host", () => {

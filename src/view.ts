@@ -80,7 +80,7 @@ export function distroView(
       supported: false,
       id: "",
       package_manager: null,
-      summary: "Not a supported Linux target",
+      summary: "Not a supported Linux or macOS target",
       refusal: friendlyError(
         probeError || "the target did not return a readable /etc/os-release",
       ),
@@ -348,8 +348,8 @@ export function friendlyError(raw: unknown): string {
   }
   if (low.includes("/etc/os-release")) {
     return (
-      "Peckboard could not identify this target as a Linux host — it could not " +
-      "read /etc/os-release. Only Linux targets can be managed here."
+      "Peckboard could not identify this target as a Linux or macOS host — it " +
+      "could not read /etc/os-release. Only Linux and macOS targets can be managed here."
     );
   }
   if (

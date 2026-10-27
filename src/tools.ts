@@ -78,13 +78,13 @@ interface DistroInfo {
   idLike: string[];
 }
 
-/** Confirm the target is Linux (refuses clearly if not) and map its distro
+/** Confirm the target is Linux or macOS (refuses clearly if not) and map its distro
  * to a package manager, or null if unrecognised. Never guesses. */
 function probeDistro(target: TargetRecord): DistroInfo {
   const res = runOnTarget(target, OS_RELEASE_PROBE, PROBE_TIMEOUT_SECS);
   if (!res.ok || !res.stdout.trim()) {
     throw new Error(
-      `could not read /etc/os-release on target '${target.id}'; this plugin only supports Linux targets`,
+      `could not read /etc/os-release on target '${target.id}'; this plugin only supports Linux and macOS targets`,
     );
   }
   const release = parseOsRelease(res.stdout);

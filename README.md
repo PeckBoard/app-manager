@@ -186,8 +186,13 @@ detect/version probes (see "The pip Namespace" below).
 
 Distro detection reads `/etc/os-release` on the target and maps
 `ID`/`ID_LIKE` to one of `apt` (debian/ubuntu), `dnf` (fedora/rhel), `pacman`
-(arch), `zypper` (suse). An unrecognised or non-Linux target is refused with
-a clear message — never a guessed command.
+(arch), `zypper` (suse). An unrecognised distro gets no package-manager
+recipes — never a guessed command. macOS (no `/etc/os-release`) probes as
+`ID=macos` with no package manager, so only vendor scripts run there; `mcpx`
+picks its macOS build, while Linux-only ones (the systemd bridges, the
+OrcaSlicer AppImage) fail with their own error. Windows targets are
+refused: every exec path (local `sh -c`, SSH, the `nohup` job wrapper) is
+POSIX shell.
 
 ## Adding an App by Hand
 

@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
   APPS,
   findApp,
   isVendorApp,
@@ -223,6 +234,60 @@ describe("catalog", () => {
     expect(install).not.toContain("systemctl");
     expect(app.remove.vendor).toContain('rm -f "$HOME/.local/bin/mcpx"');
     expect(app.remove.vendor).not.toContain('.config/mcpx"');
+  });
+  it("mcpx picks the macOS asset on Darwin and checks it with shasum", () => {
+    // Runs the real script with a macOS-shaped PATH: uname says Darwin/arm64,
+    // curl serves a fake release from disk, and there is no sha256sum.
+    const root = mkdtempSync(join(tmpdir(), "lam-mcpx-"));
+    const bin = join(root, "bin");
+    const home = join(root, "home");
+    mkdirSync(bin);
+    mkdirSync(home);
+    for (const tool of ["mktemp", "cut", "mkdir", "install", "rm", "cat"]) {
+      const real = execFileSync("sh", ["-c", `command -v ${tool}`])
+        .toString()
+        .trim();
+      symlinkSync(real, join(bin, tool));
+    }
+    const sha = execFileSync("sh", ["-c", "command -v sha256sum"])
+      .toString()
+      .trim();
+    const shim = (name: string, body: string) => {
+      writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
+      chmodSync(join(bin, name), 0o755);
+    };
+    shim("uname", '[ "$1" = -s ] && echo Darwin || echo arm64');
+    shim("shasum", `[ "$1" = -a ] && shift 2; exec ${sha} "$@"`);
+    const release = join(root, "release");
+    mkdirSync(release);
+    const asset = join(release, "mcpx-macos-aarch64");
+    writeFileSync(asset, "#!/bin/sh\necho mcpx 9.9.9\n");
+    const hash = execFileSync(sha, [asset]).toString().split(" ")[0];
+    writeFileSync(`${asset}.sha256`, `${hash}  mcpx-macos-aarch64\n`);
+    shim(
+      "curl",
+      `while [ $# -gt 1 ]; do [ "$1" = -o ] && out="$2"; shift; done\n` +
+        `echo "$1" >> ${join(root, "urls")}\n` +
+        `exec cat "${release}/\${1##*/}" > "$out"`,
+    );
+    const app = findApp("mcpx")!;
+    const res = spawnSync("/bin/sh", ["-c", installRecipeFor(app, null)!], {
+      env: { PATH: bin, HOME: home },
+    });
+    expect(res.stderr.toString()).toBe("");
+    expect(res.status).toBe(0);
+    expect(res.stdout.toString()).toBe("mcpx 9.9.9\n");
+    expect(readFileSync(join(root, "urls"), "utf8")).toContain(
+      "/releases/latest/download/mcpx-macos-aarch64.sha256",
+    );
+    // A tampered checksum is refused.
+    writeFileSync(`${asset}.sha256`, `${"0".repeat(64)}  mcpx-macos-aarch64\n`);
+    const bad = spawnSync("/bin/sh", ["-c", installRecipeFor(app, null)!], {
+      env: { PATH: bin, HOME: home },
+    });
+    expect(bad.status).not.toBe(0);
+    expect(bad.stderr.toString()).toContain("sha256 mismatch");
+    rmSync(root, { recursive: true, force: true });
   });
   describe("python / pip namespace entries", () => {
     it("python3 and pip are normal distro-packaged apps", () => {
