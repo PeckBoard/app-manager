@@ -81,6 +81,21 @@ otherwise a private official Node 22 (sha256-checked against
 `SHASUMS256.txt`). Token in `~/.config/homekit-bridge/token`, systemd **user**
 unit on `127.0.0.1:7782`. Remove keeps the token and
 `~/.local/share/homekit-bridge` (the accessory pairings).
+**0.8.8 adds `voicestudio` to the catalog** — the VoiceStudio speech server
+(github.com/debpalash/VoiceStudio, AGPL-3.0) Peckboard's voice settings point
+at; data only, no permission change. It runs the pinned
+`ghcr.io/debpalash/voicestudio:0.5.6` image headless in Docker on port 3900
+(OpenAI-compatible `/v1/audio/speech` + `/v1/audio/transcriptions`), with
+`--gpus all` under the NVIDIA runtime, the `-rocm` image when `/dev/kfd`
+exists, else CPU (ARM64 needs the NVIDIA runtime — there is no CPU ARM64
+image). It refuses before installing anything when Docker is missing or
+`docker info` fails. A random API key goes to `~/.config/voicestudio/api-key`
+(mode 600, created only when missing, passed to the container through the
+environment and never printed); the port is published on all interfaces,
+key-gated, because the speech server is often another machine. After
+`/health` answers it pre-downloads the required models (~2.4 GB) through the
+authenticated `/models/install` API, best-effort. Remove deletes the
+container and keeps the `voicestudio-data` volume and the key.
 
 ## Dashboard Page
 

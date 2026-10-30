@@ -29,6 +29,7 @@ const VENDOR_ONLY = [
   "print-bridge",
   "homekit-bridge",
   "mcpx",
+  "voicestudio",
 ];
 const PM_APPS = ["git", "node", "docker", "ripgrep", "xvfb"];
 
@@ -288,6 +289,54 @@ describe("catalog", () => {
     expect(bad.status).not.toBe(0);
     expect(bad.stderr.toString()).toContain("sha256 mismatch");
     rmSync(root, { recursive: true, force: true });
+  });
+  it("voicestudio runs a pinned Docker image with a key that is minted once and never shown", () => {
+    const app = findApp("voicestudio")!;
+    expect(isVendorApp(app)).toBe(true);
+    const install = app.install.vendor!;
+    const remove = app.remove.vendor!;
+    for (const script of [install, remove, app.version, app.detect]) {
+      expect(script).not.toContain("sudo");
+      execFileSync("sh", ["-n", "-c", script]);
+    }
+    // Refuses before touching anything without a usable Docker daemon.
+    const firstWrite = install.indexOf("mkdir -p");
+    expect(install.indexOf("command -v docker")).toBeLessThan(firstWrite);
+    expect(install.indexOf("docker info >/dev/null")).toBeLessThan(firstWrite);
+    expect(install).toContain("docker group");
+    // One pinned tag; the GPU variants are suffixes of it.
+    expect(install).toContain("base='ghcr.io/debpalash/voicestudio:0.5.6'");
+    expect(install).toContain('image="$base-rocm"');
+    expect(install).toContain('image="$base-cuda-arm64"');
+    expect(install).toContain('gpu="--gpus all"');
+    // Key only minted when absent, handed over via the environment, never echoed.
+    expect(install).toContain(
+      'if [ ! -e "$HOME/.config/voicestudio/api-key" ]; then (umask 077;',
+    );
+    expect(install).toContain('OMNIVOICE_API_KEY="$key" docker run');
+    expect(install).toContain("-e OMNIVOICE_API_KEY -e");
+    expect(install).not.toMatch(/echo[^;]*\$key/);
+    // The only read of the key file captures it into $key.
+    expect(install.split('cat "$HOME/.config/voicestudio/api-key"').length - 1).toBe(1);
+    expect(install).toContain('key="$(cat "$HOME/.config/voicestudio/api-key")"');
+    // Recreated on every (re)install, then waited on.
+    expect(install.indexOf("docker rm -f voicestudio")).toBeLessThan(
+      install.indexOf("docker run"),
+    );
+    expect(install).toContain("http://127.0.0.1:3900/health");
+    expect(install).toContain("docker logs --tail 50 voicestudio");
+    // Model pre-download is best-effort.
+    expect(install).toContain("/models/install");
+    expect(install).toContain("if ! docker exec voicestudio python3 -c");
+    expect(install).toContain("VoiceStudio listening on http://$addr:3900");
+    // Remove deletes the container only; volume and key survive.
+    expect(remove).toContain("docker rm -f voicestudio");
+    const told = remove.indexOf('echo "VoiceStudio removed');
+    expect(remove.indexOf("docker rm -f voicestudio")).toBeLessThan(told);
+    // The wipe commands appear only inside the closing message.
+    expect(remove.indexOf("docker volume rm voicestudio-data")).toBeGreaterThan(told);
+    expect(remove.indexOf("rm -r ~/.config/voicestudio")).toBeGreaterThan(told);
+    expect(app.detect).toContain("docker inspect --type container voicestudio");
   });
   describe("python / pip namespace entries", () => {
     it("python3 and pip are normal distro-packaged apps", () => {

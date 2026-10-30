@@ -393,6 +393,151 @@ const MCPX_INSTALL =
   'install -m 755 "$tmp/$asset" "$HOME/.local/bin/mcpx"; ' +
   'rm -rf "$tmp"; ' +
   '"$HOME/.local/bin/mcpx" --version';
+
+/** The pinned VoiceStudio image (github.com/debpalash/VoiceStudio). The
+ * `-rocm` and `-cuda-arm64` variants share this tag. Bump it here only. */
+const VOICESTUDIO_IMAGE = "ghcr.io/debpalash/voicestudio:0.5.6";
+
+/** Pre-downloads VoiceStudio's required models (`required: true` in its
+ * catalog — today only k2-fsa/OmniVoice, ~2.4 GB) so the first reply isn't a
+ * multi-minute download. Runs inside the container (`docker exec ... python3`,
+ * as VoiceStudio's Docker docs do), so the key is read from the container's
+ * own OMNIVOICE_API_KEY and never reaches a host command line. Per
+ * docs/production-private-api.md: list with GET /models, start each with
+ * POST /models/install (returns at once; the download runs server-side),
+ * then poll GET /models/install/status until no job is downloading and
+ * GET /models reports them installed. Waits at most 15 minutes; past that
+ * the download simply carries on in the background. */
+const VOICESTUDIO_PREFETCH_PY = [
+  "import json, os, sys, time, urllib.request",
+  'BASE = "http://127.0.0.1:3900"',
+  "WAIT = 900",
+  "def call(method, path, body=None):",
+  '    headers = {"Authorization": "Bearer " + os.environ.get("OMNIVOICE_API_KEY", "")}',
+  "    data = None",
+  "    if body is not None:",
+  "        data = json.dumps(body).encode()",
+  '        headers["Content-Type"] = "application/json"',
+  "    req = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)",
+  "    with urllib.request.urlopen(req, timeout=60) as resp:",
+  "        return json.load(resp)",
+  "def missing():",
+  '    return [m for m in call("GET", "/models").get("models", [])',
+  '            if m.get("required") and m.get("supported", True) and not m.get("installed")]',
+  "def main():",
+  "    todo = missing()",
+  "    if not todo:",
+  '        print("voicestudio: default models already downloaded")',
+  "        return 0",
+  "    want = set()",
+  "    for m in todo:",
+  '        print("voicestudio: downloading %s (~%s GB)" % (m["repo_id"], m.get("size_gb", "?")), flush=True)',
+  '        call("POST", "/models/install", {"repo_id": m["repo_id"]})',
+  '        want.add(m["repo_id"])',
+  "    deadline = time.time() + WAIT",
+  "    while time.time() < deadline:",
+  "        time.sleep(10)",
+  '        jobs = [j for j in call("GET", "/models/install/status").get("jobs", []) if j.get("repo_id") in want]',
+  "        for j in jobs:",
+  '            if j.get("state") == "failed":',
+  '                print("voicestudio: download of %s failed: %s" % (j["repo_id"], j.get("error") or j.get("message") or "see docker logs voicestudio"), flush=True)',
+  "                return 1",
+  '        busy = any(j.get("state") in ("downloading", "cancelling") for j in jobs)',
+  '        if not busy and not [m for m in missing() if m["repo_id"] in want]:',
+  '            print("voicestudio: default models downloaded", flush=True)',
+  "            return 0",
+  '    print("voicestudio: still downloading after %d min; it carries on in the background" % (WAIT // 60), flush=True)',
+  "    return 1",
+  "try:",
+  "    sys.exit(main())",
+  "except Exception as e:",
+  '    print("voicestudio: model pre-download error: %s" % e, flush=True)',
+  "    sys.exit(1)",
+].join("\n");
+
+/** VoiceStudio's vendor install: a headless speech server in Docker. Refuses
+ * up front — before touching anything — without a usable Docker daemon or on
+ * an architecture with no image (ARM64 has only the NVIDIA CUDA build). Picks
+ * the GPU flavour: NVIDIA runtime → `--gpus all`, /dev/kfd on x86_64 → the
+ * `-rocm` image with the AMD device nodes, else CPU. The API key lives in
+ * ~/.config/voicestudio/api-key (mode 600, created only when absent so a
+ * reinstall never rotates a key Peckboard already holds) and is handed to
+ * `docker run` through the environment, never argv, and never printed. The
+ * container is recreated on every (re)install. Port 3900 is published on all
+ * interfaces on purpose — key-gated — because the speech server is often a
+ * different machine than Peckboard. */
+const VOICESTUDIO_INSTALL =
+  "set -e; " +
+  "if ! command -v docker >/dev/null 2>&1; then " +
+  'echo "voicestudio: Docker is not installed (no docker command); nothing was installed. ' +
+  'Install Docker first (the docker app in this catalog), then retry." >&2; exit 1; fi; ' +
+  "if ! docker info >/dev/null 2>&1; then " +
+  'echo "voicestudio: cannot talk to the Docker daemon (docker info failed); nothing was installed. ' +
+  "Start it (systemctl start docker) or, if it is running, add yourself to the docker group " +
+  '(usermod -aG docker ${USER:-$(id -un)}, then log out and back in), then retry." >&2; exit 1; fi; ' +
+  "if ! command -v curl >/dev/null 2>&1; then " +
+  'echo "voicestudio: curl is required for the health check; nothing was installed." >&2; exit 1; fi; ' +
+  `base=${shQuote(VOICESTUDIO_IMAGE)}; ` +
+  "runtimes=\"$(docker info --format '{{json .Runtimes}}' 2>/dev/null || true)\"; " +
+  'case "$runtimes" in *nvidia*) nvidia=1 ;; *) nvidia=0 ;; esac; ' +
+  'case "$(uname -m)" in ' +
+  "x86_64|amd64) " +
+  'if [ "$nvidia" = 1 ]; then image="$base"; gpu="--gpus all"; ' +
+  'elif [ -e /dev/kfd ]; then image="$base-rocm"; gpu="--device /dev/kfd --device /dev/dri"; ' +
+  'else image="$base"; gpu=""; ' +
+  'echo "voicestudio: note: no NVIDIA runtime or AMD /dev/kfd found; running on the CPU, which is slow for real-time speech"; fi ;; ' +
+  "aarch64|arm64) " +
+  'if [ "$nvidia" = 1 ]; then image="$base-cuda-arm64"; gpu="--gpus all"; ' +
+  'else echo "voicestudio: ARM64 needs the NVIDIA container runtime — VoiceStudio publishes no native CPU ARM64 image; nothing was installed." >&2; exit 1; fi ;; ' +
+  '*) echo "voicestudio: unsupported architecture $(uname -m); nothing was installed." >&2; exit 1 ;; esac; ' +
+  'mkdir -p "$HOME/.config/voicestudio"; ' +
+  'if [ ! -e "$HOME/.config/voicestudio/api-key" ]; then ' +
+  "(umask 077; od -An -N32 -tx1 /dev/urandom | tr -d ' \\n' > \"$HOME/.config/voicestudio/api-key\"); " +
+  'chmod 600 "$HOME/.config/voicestudio/api-key"; fi; ' +
+  'key="$(cat "$HOME/.config/voicestudio/api-key")"; ' +
+  'if [ -z "$key" ]; then echo "voicestudio: ~/.config/voicestudio/api-key is empty; delete it and retry" >&2; exit 1; fi; ' +
+  'docker pull "$image"; ' +
+  // rm, then run: a reinstall must recreate the container on the new image.
+  "docker rm -f voicestudio >/dev/null 2>&1 || true; " +
+  'OMNIVOICE_API_KEY="$key" docker run -d --name voicestudio --restart unless-stopped -p 3900:3900 ' +
+  "-e OMNIVOICE_API_KEY -e OMNIVOICE_DATA_DIR=/app/omnivoice_data -e OMNIVOICE_ANALYTICS_DISABLED=1 " +
+  '-v voicestudio-data:/app/omnivoice_data $gpu "$image" >/dev/null; ' +
+  // 503 while it boots is normal; give it up to 240 s.
+  'echo "voicestudio: waiting for http://127.0.0.1:3900/health (up to 240 s)"; ' +
+  'deadline=$(($(date +%s) + 240)); ' +
+  "until curl -fs --max-time 5 -o /dev/null http://127.0.0.1:3900/health; do " +
+  'if [ "$(date +%s)" -ge "$deadline" ]; then ' +
+  'echo "voicestudio: not healthy after 240 s; last container logs:" >&2; ' +
+  "docker logs --tail 50 voicestudio >&2 2>&1 || true; exit 1; fi; sleep 2; done; " +
+  'echo "voicestudio: pre-downloading the default models (~2.4 GB) so the first reply is not slow"; ' +
+  `if ! docker exec voicestudio python3 -c ${shQuote(VOICESTUDIO_PREFETCH_PY)}; then ` +
+  'echo "voicestudio: note: model pre-download did not finish; models download on first use instead"; fi; ' +
+  "addr=\"$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == \"src\") { print $(i + 1); exit }}')\"; " +
+  "[ -n \"$addr\" ] || addr=\"$(hostname -I 2>/dev/null | awk '{print $1}')\"; " +
+  '[ -n "$addr" ] || addr="$(hostname 2>/dev/null || echo localhost)"; ' +
+  'echo "VoiceStudio listening on http://$addr:3900 — API key in ~/.config/voicestudio/api-key. ' +
+  'In Peckboard: Settings → Voice → Speech server."';
+
+/** Deletes the container only. The voicestudio-data volume (models, voices,
+ * history) and the API key are kept on purpose so a reinstall is instant and
+ * Peckboard's saved key keeps working. */
+const VOICESTUDIO_REMOVE =
+  "set -e; " +
+  "if ! docker info >/dev/null 2>&1; then " +
+  'echo "voicestudio: cannot talk to the Docker daemon (docker info failed); nothing was removed." >&2; exit 1; fi; ' +
+  "if docker inspect --type container voicestudio >/dev/null 2>&1; then " +
+  "docker rm -f voicestudio >/dev/null; fi; " +
+  'echo "VoiceStudio removed; kept the voicestudio-data volume (models + data) and ~/.config/voicestudio/api-key. ' +
+  'To wipe them: docker volume rm voicestudio-data; rm -r ~/.config/voicestudio"';
+
+/** /health's `version` (`{"status": "ok", "device": ..., "version": ...}`),
+ * falling back to the running container's image tag. */
+const VOICESTUDIO_VERSION =
+  "v=\"$(curl -fs --max-time 5 http://127.0.0.1:3900/health 2>/dev/null | " +
+  "awk -F'\"version\"' 'NF > 1 { split($2, a, \"\\\"\"); print a[2]; exit }')\"; " +
+  'if [ -n "$v" ]; then echo "$v"; else ' +
+  "docker inspect --type container --format '{{.Config.Image}}' voicestudio 2>/dev/null | awk -F: '{print $NF}'; fi";
+
 export const APPS: CatalogApp[] = [
   {
     id: "git",
@@ -704,6 +849,25 @@ export const APPS: CatalogApp[] = [
       vendor:
         'rm -f "$HOME/.local/bin/mcpx"; echo "mcpx removed; kept ~/.config/mcpx (delete it by hand to wipe tokens)"',
     },
+  },
+  {
+    id: "voicestudio",
+    name: "VoiceStudio",
+    description:
+      "Self-hosted speech server (github.com/debpalash/VoiceStudio, AGPL-3.0) " +
+      "run headless in Docker on port 3900, with OpenAI-compatible " +
+      "/v1/audio/speech and /v1/audio/transcriptions — the speech server " +
+      "Peckboard's voice settings point at. Docker is required (the daemon " +
+      "must be running and usable by you); an NVIDIA or AMD (ROCm) GPU is " +
+      "used when available, otherwise it runs on the CPU (slow for real-time " +
+      "speech). A random API key goes to ~/.config/voicestudio/api-key " +
+      "(created only when missing) and the ~2.4 GB default models are " +
+      "downloaded up front. Removal deletes the container but keeps the " +
+      "voicestudio-data volume (models + data) and the key.",
+    detect: "docker inspect --type container voicestudio >/dev/null 2>&1",
+    version: VOICESTUDIO_VERSION,
+    install: { vendor: VOICESTUDIO_INSTALL },
+    remove: { vendor: VOICESTUDIO_REMOVE },
   },
 ];
 
